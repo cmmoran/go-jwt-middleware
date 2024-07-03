@@ -7,10 +7,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/auth0/go-jwt-middleware/v2"
+	jwtmiddleware "github.com/auth0/go-jwt-middleware/v2"
 	"github.com/auth0/go-jwt-middleware/v2/jwks"
 	"github.com/auth0/go-jwt-middleware/v2/validator"
-	jwtmiddleware "github.com/auth0/go-jwt-middleware/v2"
 )
 
 var handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +30,7 @@ var handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(payload)
+	_, _ = w.Write(payload)
 })
 
 func setupHandler(issuer string, audience []string) http.Handler {
@@ -40,7 +39,7 @@ func setupHandler(issuer string, audience []string) http.Handler {
 		log.Fatalf("failed to parse the issuer url: %v", err)
 	}
 
-	provider := jwks.NewCachingProvider(issuerURL, 5*time.Minute)
+	provider := jwks.NewProvider(issuerURL, jwks.WithCachingOptions(jwks.WithCacheTTL(5*time.Minute)))
 
 	// Set up the validator.
 	jwtValidator, err := validator.New(
@@ -58,5 +57,5 @@ func setupHandler(issuer string, audience []string) http.Handler {
 
 func main() {
 	mainHandler := setupHandler("https://<your tenant domain>/", []string{"<your api identifier>"})
-	http.ListenAndServe("0.0.0.0:3000", mainHandler)
+	_ = http.ListenAndServe("0.0.0.0:3000", mainHandler)
 }

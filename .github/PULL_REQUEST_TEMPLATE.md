@@ -1,9 +1,3 @@
-<!--
-❗ For general support or usage questions, use the Auth0 Community forums or raise a support ticket.
-
-By submitting a pull request to this repository, you agree to the terms within the Auth0 Code of Conduct: https://github.com/auth0/open-source-template/blob/master/CODE-OF-CONDUCT.md.
--->
-
 ### 📝 Checklist
 
 - [ ] All new/changed/fixed functionality is covered by tests (or N/A)
@@ -28,7 +22,6 @@ Describe both what is changing and why this is important. Include:
 Add relevant links supporting this change, such as:
 
 - GitHub issue/PR number addressed or fixed
-- Auth0 Community post
 - StackOverflow answer
 - Related pull requests/issues from other repositories
 

@@ -17,16 +17,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-jose/go-jose/v4"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/go-jose/go-jose.v2"
 
 	"github.com/auth0/go-jwt-middleware/v2/internal/oidc"
 )
 
 func Test_JWKSProvider(t *testing.T) {
-	var requestCount int32
+	requestCount := new(atomic.Int32)
+	requestCount.Store(0)
 
 	expectedJWKS, err := generateJWKS()
 	require.NoError(t, err)
@@ -34,7 +35,7 @@ func Test_JWKSProvider(t *testing.T) {
 	expectedCustomJWKS, err := generateJWKS()
 	require.NoError(t, err)
 
-	testServer := setupTestServer(t, expectedJWKS, expectedCustomJWKS, &requestCount)
+	testServer := setupTestServer(t, expectedJWKS, expectedCustomJWKS, requestCount)
 	defer testServer.Close()
 
 	testServerURL, err := url.Parse(testServer.URL)
@@ -68,8 +69,8 @@ func Test_JWKSProvider(t *testing.T) {
 			Timeout: time.Hour, // Unused value. We only need this to have a client different from the default.
 		}
 		provider := NewProvider(testServerURL, WithCustomClient(client))
-		if !cmp.Equal(client, provider.Client) {
-			t.Fatalf("expected custom client %#v to be configured. Got: %#v", client, provider.Client)
+		if !cmp.Equal(client, provider.keyProvider.(*defaultKeyProvider).client) {
+			t.Fatalf("expected custom client %#v to be configured. Got: %#v", client, provider.keyProvider.(*defaultKeyProvider).client)
 		}
 	})
 
@@ -86,32 +87,35 @@ func Test_JWKSProvider(t *testing.T) {
 	})
 
 	t.Run("It eventually re-caches the JWKS if they have expired when using CachingProvider", func(t *testing.T) {
-		requestCount = 0
-		expiredCachedJWKS, err := generateJWKS()
-		require.NoError(t, err)
+		requestCount.Store(0)
+		expiredCachedJWKS, eerr := generateJWKS()
+		require.NoError(t, eerr)
 
-		provider := NewCachingProvider(testServerURL, 5*time.Minute)
-		provider.cache[testServerURL.Hostname()] = cachedJWKS{
+		provider := NewProvider(testServerURL, WithCachingOptions(WithCacheTTL(5*time.Minute)))
+		provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.cache[testServerURL.Hostname()] = cachedJWKS{
 			jwks:      expiredCachedJWKS,
 			expiresAt: time.Now().Add(-10 * time.Minute),
 		}
+		if !cmp.Equal(expiredCachedJWKS, provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.cache[testServerURL.Hostname()].jwks) {
+			t.Fatalf("jwks did not match: %s", cmp.Diff(expiredCachedJWKS, provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.cache[testServerURL.Hostname()].jwks))
+		}
 
-		returnedJWKS, err := provider.KeyFunc(context.Background())
-		require.NoError(t, err)
+		returnedJWKS, rerr := provider.KeyFunc(context.Background())
+		require.NoError(t, rerr)
 
 		if !cmp.Equal(expiredCachedJWKS, returnedJWKS) {
 			t.Fatalf("jwks did not match: %s", cmp.Diff(expiredCachedJWKS, returnedJWKS))
 		}
 
 		require.EventuallyWithT(t, func(c *assert.CollectT) {
-			returnedJWKS, err := provider.KeyFunc(context.Background())
-			require.NoError(t, err)
+			returnedJWKS, err = provider.KeyFunc(context.Background())
+			require.NoError(c, err)
 
-			assert.True(c, cmp.Equal(expectedJWKS, returnedJWKS))
-			assert.Equal(c, int32(2), requestCount)
-		}, 1*time.Second, 250*time.Millisecond, "JWKS did not update")
+			require.True(c, cmp.Equal(expectedJWKS, returnedJWKS))
+			require.Equal(c, int32(2), requestCount.Load())
+		}, 1*time.Second, 50*time.Millisecond, "JWKS did not update")
 
-		cacheExpiresAt := provider.cache[testServerURL.Hostname()].expiresAt
+		cacheExpiresAt := provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.cache[testServerURL.Hostname()].expiresAt
 		if !time.Now().Before(cacheExpiresAt) {
 			t.Fatalf("wanted cache item expiration to be in the future but it was not: %s", cacheExpiresAt)
 		}
@@ -120,9 +124,9 @@ func Test_JWKSProvider(t *testing.T) {
 	t.Run(
 		"It only calls the API once when multiple requests come in when using the CachingProvider",
 		func(t *testing.T) {
-			requestCount = 0
+			requestCount.Store(0)
 
-			provider := NewCachingProvider(testServerURL, 5*time.Minute)
+			provider := NewProvider(testServerURL, WithCachingOptions(WithCacheTTL(5*time.Minute)))
 
 			var wg sync.WaitGroup
 			for i := 0; i < 50; i++ {
@@ -134,15 +138,13 @@ func Test_JWKSProvider(t *testing.T) {
 			}
 			wg.Wait()
 
-			if requestCount != 2 {
-				t.Fatalf("only wanted 2 requests (well known and jwks) , but we got %d requests", requestCount)
-			}
+			assert.Equalf(t, int32(2), requestCount.Load(), "only wanted 2 requests (well known and jwks) , but we got %d requests", requestCount.Load())
 		},
 	)
 
 	t.Run("It sets the caching TTL to 1 if 0 is provided when using the CachingProvider", func(t *testing.T) {
-		provider := NewCachingProvider(testServerURL, 0)
-		if provider.CacheTTL != time.Minute {
+		provider := NewProvider(testServerURL, WithCachingOptions(WithCacheTTL(0)))
+		if provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.cacheTTL != time.Minute {
 			t.Fatalf("was expecting cache ttl to be 1 minute")
 		}
 	})
@@ -150,8 +152,8 @@ func Test_JWKSProvider(t *testing.T) {
 	t.Run(
 		"It fails to parse the jwks uri after fetching it from the discovery endpoint if malformed",
 		func(t *testing.T) {
-			malformedURL, err := url.Parse(testServer.URL + "/malformed")
-			require.NoError(t, err)
+			malformedURL, merr := url.Parse(testServer.URL + "/malformed")
+			require.NoError(t, merr)
 
 			provider := NewProvider(malformedURL)
 			_, err = provider.KeyFunc(context.Background())
@@ -164,10 +166,10 @@ func Test_JWKSProvider(t *testing.T) {
 	t.Run("It only calls the API once when multiple requests come in when using the CachingProvider with expired cache", func(t *testing.T) {
 		initialJWKS, err := generateJWKS()
 		require.NoError(t, err)
-		requestCount = 0
+		requestCount.Store(0)
 
-		provider := NewCachingProvider(testServerURL, 5*time.Minute)
-		provider.cache[testServerURL.Hostname()] = cachedJWKS{
+		provider := NewProvider(testServerURL, WithCachingOptions(WithCacheTTL(5*time.Minute)))
+		provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.cache[testServerURL.Hostname()] = cachedJWKS{
 			jwks:      initialJWKS,
 			expiresAt: time.Now(),
 		}
@@ -183,17 +185,17 @@ func Test_JWKSProvider(t *testing.T) {
 		wg.Wait()
 
 		require.EventuallyWithT(t, func(c *assert.CollectT) {
-			returnedJWKS, err := provider.KeyFunc(context.Background())
-			require.NoError(t, err)
+			returnedJWKS, rerr := provider.KeyFunc(context.Background())
+			require.NoError(c, rerr)
 
-			assert.True(c, cmp.Equal(expectedJWKS, returnedJWKS))
-			assert.Equal(c, int32(2), requestCount)
-		}, 1*time.Second, 250*time.Millisecond, "JWKS did not update")
+			require.True(c, cmp.Equal(expectedJWKS, returnedJWKS))
+			require.Equal(c, int32(2), requestCount.Load())
+		}, 1*time.Second, 50*time.Millisecond, "JWKS did not update")
 	})
 
 	t.Run("It only calls the API once when multiple requests come in when using the CachingProvider with no cache", func(t *testing.T) {
-		provider := NewCachingProvider(testServerURL, 5*time.Minute)
-		requestCount = 0
+		provider := NewProvider(testServerURL, WithCachingOptions(WithCacheTTL(5*time.Minute)))
+		requestCount.Store(0)
 
 		var wg sync.WaitGroup
 		for i := 0; i < 50; i++ {
@@ -205,48 +207,48 @@ func Test_JWKSProvider(t *testing.T) {
 		}
 		wg.Wait()
 
-		if requestCount != 2 {
-			t.Fatalf("only wanted 2 requests (well known and jwks) , but we got %d requests", requestCount)
+		if requestCount.Load() != int32(2) {
+			t.Fatalf("only wanted 2 requests (well known and jwks) , but we got %d requests", requestCount.Load())
 		}
 	})
 
 	t.Run("Should delete cache entry if the refresh request fails", func(t *testing.T) {
-		malformedURL, err := url.Parse(testServer.URL + "/malformed")
-		require.NoError(t, err)
+		malformedURL, merr := url.Parse(testServer.URL + "/malformed")
+		require.NoError(t, merr)
 
-		expiredCachedJWKS, err := generateJWKS()
-		require.NoError(t, err)
+		expiredCachedJWKS, eerr := generateJWKS()
+		require.NoError(t, eerr)
 
-		provider := NewCachingProvider(malformedURL, 5*time.Minute)
-		provider.cache[malformedURL.Hostname()] = cachedJWKS{
+		provider := NewProvider(malformedURL, WithCachingOptions(WithCacheTTL(5*time.Minute)))
+		provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.cache[malformedURL.Hostname()] = cachedJWKS{
 			jwks:      expiredCachedJWKS,
 			expiresAt: time.Now().Add(-10 * time.Minute),
 		}
 
 		// Trigger the refresh of the JWKS, which should return the cached JWKS
-		returnedJWKS, err := provider.KeyFunc(context.Background())
-		require.NoError(t, err)
+		returnedJWKS, rerr := provider.KeyFunc(context.Background())
+		require.NoError(t, rerr)
 		assert.Equal(t, expiredCachedJWKS, returnedJWKS)
 
 		// Eventually it should return a nil JWKS
 		require.EventuallyWithT(t, func(c *assert.CollectT) {
-			returnedJWKS, err := provider.KeyFunc(context.Background())
-			require.Error(t, err)
+			returnedJWKS, err = provider.KeyFunc(context.Background())
+			require.Error(c, err)
 
-			assert.Nil(c, returnedJWKS)
+			require.Nil(c, returnedJWKS)
 
-			cachedJWKS := provider.cache[malformedURL.Hostname()].jwks
+			currentCachedJWKS := provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.cache[malformedURL.Hostname()].jwks
 
-			assert.Nil(t, cachedJWKS)
-		}, 1*time.Second, 250*time.Millisecond, "JWKS did not get uncached")
+			require.Nil(c, currentCachedJWKS)
+		}, 1*time.Second, 50*time.Millisecond, "JWKS did not get uncached")
 	})
 	t.Run("It only calls the API once when multiple requests come in when using the CachingProvider with expired cache (WithSynchronousRefresh)", func(t *testing.T) {
-		initialJWKS, err := generateJWKS()
-		require.NoError(t, err)
-		atomic.StoreInt32(&requestCount, 0)
+		initialJWKS, ierr := generateJWKS()
+		require.NoError(t, ierr)
+		requestCount.Store(0)
 
-		provider := NewCachingProvider(testServerURL, 5*time.Minute, WithSynchronousRefresh(true))
-		provider.cache[testServerURL.Hostname()] = cachedJWKS{
+		provider := NewProvider(testServerURL, WithCachingOptions(WithCacheTTL(5*time.Minute), WithSynchronousRefresh(true)))
+		provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.cache[testServerURL.Hostname()] = cachedJWKS{
 			jwks:      initialJWKS,
 			expiresAt: time.Now(),
 		}
@@ -260,19 +262,18 @@ func Test_JWKSProvider(t *testing.T) {
 			}()
 		}
 		wg.Wait()
-		time.Sleep(2 * time.Second)
 		// No need for Eventually since we're not blocking on refresh.
-		returnedJWKS, err := provider.KeyFunc(context.Background())
-		require.NoError(t, err)
+		returnedJWKS, rerr := provider.KeyFunc(context.Background())
+		require.NoError(t, rerr)
 		assert.True(t, cmp.Equal(expectedJWKS, returnedJWKS))
 
 		// Non-blocking behavior may allow extra API calls before the cache updates.
-		assert.Equal(t, int32(2), atomic.LoadInt32(&requestCount), "only wanted 2 requests (well known and jwks), but we got %d requests", atomic.LoadInt32(&requestCount))
+		assert.Equal(t, int32(2), requestCount.Load(), "only wanted 2 requests (well known and jwks), but we got %d requests", requestCount.Load())
 	})
 
 	t.Run("It only calls the API once when multiple requests come in when using the CachingProvider with no cache (WithSynchronousRefresh)", func(t *testing.T) {
-		provider := NewCachingProvider(testServerURL, 5*time.Minute, WithSynchronousRefresh(true))
-		atomic.StoreInt32(&requestCount, 0)
+		provider := NewProvider(testServerURL, WithCachingOptions(WithCacheTTL(5*time.Minute), WithSynchronousRefresh(true)))
+		requestCount.Store(0)
 
 		var wg sync.WaitGroup
 		for i := 0; i < 50; i++ {
@@ -284,35 +285,23 @@ func Test_JWKSProvider(t *testing.T) {
 		}
 		wg.Wait()
 
-		assert.Equal(t, int32(2), atomic.LoadInt32(&requestCount), "only wanted 2 requests (well known and jwks), but we got %d requests")
+		assert.EqualValues(t, int32(2), requestCount.Load(), "only wanted 2 requests (well known and jwks), but we got %d requests", requestCount.Load())
 	})
-	t.Run("It correctly applies both ProviderOptions and CachingProviderOptions when using the CachingProvider without breaking", func(t *testing.T) {
+	t.Run("It correctly applies both ProviderOptions and cachingProviderOptions when using the CachingProvider without breaking", func(t *testing.T) {
 		issuerURL, _ := url.Parse("https://example.com")
 		jwksURL, _ := url.Parse("https://example.com/jwks")
 		customClient := &http.Client{Timeout: 10 * time.Second}
 
-		provider := NewCachingProvider(
+		provider := NewProvider(
 			issuerURL,
-			30*time.Second,
+			WithCachingOptions(WithSynchronousRefresh(true), WithCacheTTL(30*time.Second)),
 			WithCustomJWKSURI(jwksURL),
 			WithCustomClient(customClient),
-			WithSynchronousRefresh(true),
 		)
 
 		assert.Equal(t, jwksURL, provider.CustomJWKSURI, "CustomJWKSURI should be set correctly")
-		assert.Equal(t, customClient, provider.Client, "Custom HTTP client should be set correctly")
-		assert.True(t, provider.synchronousRefresh, "Synchronous refresh should be enabled")
-	})
-	t.Run("It panics when an invalid option type is provided when using the CachingProvider", func(t *testing.T) {
-		issuerURL, _ := url.Parse("https://example.com")
-
-		assert.Panics(t, func() {
-			NewCachingProvider(
-				issuerURL,
-				30*time.Second,
-				"invalid_option",
-			)
-		}, "Expected panic when passing an invalid option type")
+		assert.Equal(t, customClient, provider.keyProvider.(*cachingKeyProvider).client, "Custom HTTP client should be set correctly")
+		assert.True(t, provider.keyProvider.(*cachingKeyProvider).cachingProviderOptions.synchronousRefresh, "Synchronous refresh should be enabled")
 	})
 }
 
@@ -360,12 +349,12 @@ func setupTestServer(
 	t *testing.T,
 	expectedJWKS *jose.JSONWebKeySet,
 	expectedCustomJWKS *jose.JSONWebKeySet,
-	requestCount *int32,
+	requestCount *atomic.Int32,
 ) (server *httptest.Server) {
 	t.Helper()
 
 	var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(requestCount, 1)
+		requestCount.Add(1)
 
 		switch r.URL.String() {
 		case "/malformed/.well-known/openid-configuration":
