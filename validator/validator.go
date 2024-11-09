@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/go-jose/go-jose/v4"
 	"strings"
 	"time"
 
-	"gopkg.in/go-jose/go-jose.v2/jwt"
+	"github.com/go-jose/go-jose/v4/jwt"
 )
 
 // Signature algorithms
@@ -37,7 +38,8 @@ type Validator struct {
 }
 
 // SignatureAlgorithm is a signature algorithm.
-type SignatureAlgorithm string
+type SignatureAlgorithm jose.SignatureAlgorithm
+type SignatureAlgorithms []jose.SignatureAlgorithm
 
 var allowedSigningAlgorithms = map[SignatureAlgorithm]bool{
 	EdDSA: true,
@@ -87,8 +89,8 @@ func New(
 		return nil, errors.New("audience is required but was empty")
 	} else if len(issuerURL) > 0 && len(audience) > 0 {
 		v.expectedClaims = append(v.expectedClaims, jwt.Expected{
-			Issuer:   issuerURL,
-			Audience: audience,
+			Issuer:      issuerURL,
+			AnyAudience: audience,
 		})
 	}
 
@@ -100,7 +102,7 @@ func New(
 		if expected.Issuer == "" {
 			return nil, fmt.Errorf("issuer url %d is required but was empty", i)
 		}
-		if len(expected.Audience) == 0 {
+		if len(expected.AnyAudience) == 0 {
 			return nil, fmt.Errorf("audience %d is required but was empty", i)
 		}
 	}
@@ -145,7 +147,7 @@ func NewValidator(
 		if expected.Issuer == "" {
 			return nil, fmt.Errorf("issuer url %d is required but was empty", i)
 		}
-		if len(expected.Audience) == 0 {
+		if len(expected.AnyAudience) == 0 {
 			return nil, fmt.Errorf("audience %d is required but was empty", i)
 		}
 	}
@@ -155,7 +157,7 @@ func NewValidator(
 
 // ValidateToken validates the passed in JWT using the jose v2 package.
 func (v *Validator) ValidateToken(ctx context.Context, tokenString string) (interface{}, error) {
-	token, err := jwt.ParseSigned(tokenString)
+	token, err := jwt.ParseSigned(tokenString, signatureAlgorithms(v.signatureAlgorithm))
 	if err != nil {
 		return nil, fmt.Errorf("could not parse the token: %w", err)
 	}
@@ -208,7 +210,7 @@ func validateClaimsWithLeeway(actualClaims jwt.Claims, expectedIn []jwt.Expected
 		}
 
 		foundAudience := false
-		for _, value := range expectedClaims.Audience {
+		for _, value := range expectedClaims.AnyAudience {
 			if actualClaims.Audience.Contains(value) {
 				foundAudience = true
 				break
@@ -219,7 +221,7 @@ func validateClaimsWithLeeway(actualClaims jwt.Claims, expectedIn []jwt.Expected
 				currentError,
 				jwt.ErrInvalidAudience,
 				strings.Join(actualClaims.Audience, ","),
-				strings.Join(expectedClaims.Audience, ","),
+				strings.Join(expectedClaims.AnyAudience, ","),
 			)
 			continue
 		}
@@ -269,6 +271,7 @@ func validateSigningMethod(validAlg, tokenAlg string) error {
 	if validAlg != tokenAlg {
 		return fmt.Errorf("expected %q signing algorithm but token specified %q", validAlg, tokenAlg)
 	}
+
 	return nil
 }
 
@@ -305,5 +308,15 @@ func numericDateToUnixTime(date *jwt.NumericDate) int64 {
 	if date != nil {
 		return date.Time().Unix()
 	}
+
 	return 0
+}
+
+func signatureAlgorithms(algs ...SignatureAlgorithm) SignatureAlgorithms {
+	js := make(SignatureAlgorithms, len(algs))
+	for i, alg := range algs {
+		js[i] = jose.SignatureAlgorithm(alg)
+	}
+
+	return js
 }

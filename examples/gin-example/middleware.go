@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"gopkg.in/go-jose/go-jose.v2/jwt"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"log"
 	"net/http"
 	"time"
@@ -88,11 +88,11 @@ func checkJWTMultiple() gin.HandlerFunc {
 		validator.WithCustomClaims(customClaims),
 		validator.WithAllowedClockSkew(30*time.Second),
 		validator.WithExpectedClaims(jwt.Expected{
-			Issuer:   issuer,
-			Audience: audience,
+			Issuer:      issuer,
+			AnyAudience: audience,
 		}, jwt.Expected{
-			Issuer:   issuerTwo,
-			Audience: audienceTwo,
+			Issuer:      issuerTwo,
+			AnyAudience: audienceTwo,
 		}),
 	)
 	if err != nil {

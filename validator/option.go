@@ -1,7 +1,7 @@
 package validator
 
 import (
-	"gopkg.in/go-jose/go-jose.v2/jwt"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"time"
 )
 

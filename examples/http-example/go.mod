@@ -4,9 +4,9 @@ go 1.23
 
 require (
 	github.com/auth0/go-jwt-middleware/v2 v2.1.0
-	gopkg.in/go-jose/go-jose.v2 v2.6.3
+	github.com/go-jose/go-jose/v4 v4.0.4
 )
 
 replace github.com/auth0/go-jwt-middleware/v2 => ./../../
 
-require golang.org/x/crypto v0.17.0 // indirect
+require golang.org/x/crypto v0.25.0 // indirect
