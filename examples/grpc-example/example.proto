@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package example;
+option go_package = "example.com/main";
+
+service ExampleService {
+  rpc DoSomething(ExampleMesage) returns (ExampleMesage) {}
+}
+
+message ExampleMesage {
+  string msg = 1;
+}
