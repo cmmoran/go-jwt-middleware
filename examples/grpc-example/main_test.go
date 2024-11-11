@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"github.com/auth0/go-jwt-middleware/v2/validator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,20 +26,6 @@ func bufDialer(context.Context, string) (net.Conn, error) {
 	return lis.Dial()
 }
 
-type server struct {
-}
-
-func (s *server) DoSomething(ctx context.Context, req *ExampleMesage) (*ExampleMesage, error) {
-	if currentJwt := ctx.Value(jwtmiddleware.ContextKey{}); currentJwt == nil || currentJwt.(*validator.ValidatedClaims) == nil {
-		return nil, fmt.Errorf("%s", "did not find a valid token")
-	}
-	return &ExampleMesage{
-		Msg: fmt.Sprintf("%s %s", req.Msg, "red fish, blue fish."),
-	}, nil
-}
-
-func (s *server) mustEmbedUnimplementedExampleServiceServer() {}
-
 func init() {
 	var (
 		issuer       = "testIssuer"
@@ -48,9 +33,8 @@ func init() {
 		jwtValidator *validator.Validator
 		err          error
 	)
-	secret := []byte("abcdefghijklmnopqrstuvwxyz012345")
 	keyFunc := func(context.Context) (interface{}, error) {
-		return secret, nil
+		return []byte("abcdefghijklmnopqrstuvwxyz012345"), nil
 	}
 
 	if jwtValidator, err = validator.New(keyFunc, validator.HS256, issuer, []string{audience}); err != nil {
@@ -89,7 +73,7 @@ func TestDoSomething(t *testing.T) {
 		_ = conn.Close()
 	}()
 	client := NewExampleServiceClient(conn)
-	resp, err := client.DoSomething(ctx, &ExampleMesage{Msg: "one fish, two fish."})
+	resp, err := client.DoSomething(ctx, &ExampleMessage{Msg: "one fish, two fish."})
 	require.NoError(t, err)
 	log.Printf("Response: %s\n", resp.Msg)
 }
@@ -115,7 +99,7 @@ func TestDoSomething_InvalidToken(t *testing.T) {
 		_ = conn.Close()
 	}()
 	client := NewExampleServiceClient(conn)
-	_, err = client.DoSomething(ctx, &ExampleMesage{Msg: "one fish, two fish."})
+	_, err = client.DoSomething(ctx, &ExampleMessage{Msg: "one fish, two fish."})
 	require.Error(t, err)
 	if s, ok := status.FromError(err); ok {
 		assert.EqualError(t, s.Err(), status.Errorf(codes.Unauthenticated, jwtmiddleware.ErrJWTInvalid.Error()).Error())

@@ -26,7 +26,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ExampleServiceClient interface {
-	DoSomething(ctx context.Context, in *ExampleMesage, opts ...grpc.CallOption) (*ExampleMesage, error)
+	DoSomething(ctx context.Context, in *ExampleMessage, opts ...grpc.CallOption) (*ExampleMessage, error)
 }
 
 type exampleServiceClient struct {
@@ -37,8 +37,8 @@ func NewExampleServiceClient(cc grpc.ClientConnInterface) ExampleServiceClient {
 	return &exampleServiceClient{cc}
 }
 
-func (c *exampleServiceClient) DoSomething(ctx context.Context, in *ExampleMesage, opts ...grpc.CallOption) (*ExampleMesage, error) {
-	out := new(ExampleMesage)
+func (c *exampleServiceClient) DoSomething(ctx context.Context, in *ExampleMessage, opts ...grpc.CallOption) (*ExampleMessage, error) {
+	out := new(ExampleMessage)
 	err := c.cc.Invoke(ctx, ExampleService_DoSomething_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func (c *exampleServiceClient) DoSomething(ctx context.Context, in *ExampleMesag
 // All implementations must embed UnimplementedExampleServiceServer
 // for forward compatibility
 type ExampleServiceServer interface {
-	DoSomething(context.Context, *ExampleMesage) (*ExampleMesage, error)
+	DoSomething(context.Context, *ExampleMessage) (*ExampleMessage, error)
 	mustEmbedUnimplementedExampleServiceServer()
 }
 
@@ -58,7 +58,7 @@ type ExampleServiceServer interface {
 type UnimplementedExampleServiceServer struct {
 }
 
-func (UnimplementedExampleServiceServer) DoSomething(context.Context, *ExampleMesage) (*ExampleMesage, error) {
+func (UnimplementedExampleServiceServer) DoSomething(context.Context, *ExampleMessage) (*ExampleMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DoSomething not implemented")
 }
 func (UnimplementedExampleServiceServer) mustEmbedUnimplementedExampleServiceServer() {}
@@ -75,7 +75,7 @@ func RegisterExampleServiceServer(s grpc.ServiceRegistrar, srv ExampleServiceSer
 }
 
 func _ExampleService_DoSomething_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ExampleMesage)
+	in := new(ExampleMessage)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func _ExampleService_DoSomething_Handler(srv interface{}, ctx context.Context, d
 		FullMethod: ExampleService_DoSomething_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ExampleServiceServer).DoSomething(ctx, req.(*ExampleMesage))
+		return srv.(ExampleServiceServer).DoSomething(ctx, req.(*ExampleMessage))
 	}
 	return interceptor(ctx, in, info, handler)
 }

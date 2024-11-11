@@ -4,9 +4,9 @@ package example;
 option go_package = "example.com/main";
 
 service ExampleService {
-  rpc DoSomething(ExampleMesage) returns (ExampleMesage) {}
+  rpc DoSomething(ExampleMessage) returns (ExampleMessage) {}
 }
 
-message ExampleMesage {
+message ExampleMessage {
   string msg = 1;
 }
