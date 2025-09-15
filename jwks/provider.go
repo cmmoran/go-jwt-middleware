@@ -3,9 +3,14 @@ package jwks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,26 +93,33 @@ func WithAdditionalProviders(issuerURL *url.URL, customJWKSURI *url.URL) Provide
 // KeyFunc adheres to the keyFunc signature that the Validator requires.
 // While it returns an interface to adhere to keyFunc, as long as the
 // error is nil the type will be *jose.JSONWebKeySet.
-func (p *Provider) KeyFunc(ctx context.Context) (interface{}, error) {
+func (p *Provider) KeyFunc(ctx context.Context) (any, error) {
+	var jwks *jose.JSONWebKeySet
 	rawJwks, err := p.keyFunc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if jwks = rawJwks.(*jose.JSONWebKeySet); jwks == nil {
+		return nil, errors.New("keyFunc returned a non *jose.JSONWebKeySet")
+	}
 
 	if len(p.AdditionalProviders) == 0 {
-		return rawJwks, err
+		return jwks, nil
 	} else {
-		var jwks *jose.JSONWebKeySet
-		jwks = rawJwks.(*jose.JSONWebKeySet)
+		var errs error
 		for _, provider := range p.AdditionalProviders {
 			if rawJwks, err = provider.keyFunc(ctx); err != nil {
+				errs = errors.Join(errs, err)
 				continue
 			} else {
 				jwks.Keys = append(jwks.Keys, rawJwks.(*jose.JSONWebKeySet).Keys...)
 			}
 		}
-		return jwks, err
+		return jwks, errs
 	}
 }
 
-func (p *Provider) keyFunc(ctx context.Context) (interface{}, error) {
+func (p *Provider) keyFunc(ctx context.Context) (any, error) {
 	jwksURI := p.CustomJWKSURI
 	if jwksURI == nil {
 		wkEndpoints, err := oidc.GetWellKnownEndpointsFromIssuerURL(ctx, p.Client, *p.IssuerURL)
@@ -121,25 +133,63 @@ func (p *Provider) keyFunc(ctx context.Context) (interface{}, error) {
 		}
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURI.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("could not build request to get JWKS: %w", err)
+	return p.doResolve(ctx, jwksURI)
+}
+
+func (p *Provider) doResolve(ctx context.Context, jwksURI *url.URL) (any, error) {
+	var (
+		reader io.ReadCloser
+		req    *http.Request
+		res    *http.Response
+		err    error
+		errs   error
+	)
+
+	switch jwksURI.Scheme {
+	case "", "file":
+		reader, err = os.Open(jwksURI.Path)
+		if err != nil {
+			errs = errors.Join(err, fmt.Errorf(`unable to fetch JSON Web Keys from location "%s"`, jwksURI.String()))
+			return nil, errs
+		}
+		defer func(reader io.ReadCloser) {
+			_ = reader.Close()
+		}(reader)
+
+	case "http", "https":
+		if req, err = http.NewRequestWithContext(ctx, "GET", jwksURI.String(), nil); err != nil {
+			errs = errors.Join(err, fmt.Errorf(`unable to fetch JSON Web Keys from location "%s"`, jwksURI.String()))
+			return nil, errs
+		}
+		if res, err = p.Client.Do(req); err != nil {
+			errs = errors.Join(err, fmt.Errorf(`unable to fetch JSON Web Keys from location "%s"`, jwksURI.String()))
+			return nil, errs
+		}
+		reader = res.Body
+		defer func(reader io.ReadCloser) {
+			_ = reader.Close()
+		}(reader)
+
+		if res.StatusCode < 200 || res.StatusCode >= 400 {
+			errs = errors.Join(err, fmt.Errorf(`expected successful status code from location "%s", but received code "%d"`, jwksURI.String(), res.StatusCode))
+			return nil, errs
+		}
+
+	default:
+		errs = errors.Join(err, fmt.Errorf(`unable to fetch JSON Web Keys from location "%s" because URL scheme "%s" is not supported`, jwksURI.String(), jwksURI.Scheme))
+		return nil, errs
 	}
 
-	response, err := p.Client.Do(request)
-	if err != nil {
-		return nil, err
+	jwks := new(jose.JSONWebKeySet)
+	if err = json.NewDecoder(reader).Decode(jwks); err != nil {
+		errs = errors.Join(err, fmt.Errorf("could not decode jwks: %w", err))
+		return nil, errs
 	}
-	defer func() {
-		_ = response.Body.Close()
-	}()
+	slices.SortFunc(jwks.Keys, func(a, b jose.JSONWebKey) int {
+		return strings.Compare(a.KeyID, b.KeyID)
+	})
 
-	var jwks jose.JSONWebKeySet
-	if err = json.NewDecoder(response.Body).Decode(&jwks); err != nil {
-		return nil, fmt.Errorf("could not decode jwks: %w", err)
-	}
-
-	return &jwks, nil
+	return jwks, nil
 }
 
 // CachingProvider handles getting JWKS from the specified IssuerURL
@@ -170,7 +220,7 @@ type CachingProviderOption func(*CachingProvider)
 
 // NewCachingProvider builds and returns a new CachingProvider.
 // If cacheTTL is zero then a default value of 1 minute will be used.
-func NewCachingProvider(issuerURL *url.URL, cacheTTL time.Duration, opts ...interface{}) *CachingProvider {
+func NewCachingProvider(issuerURL *url.URL, cacheTTL time.Duration, opts ...any) *CachingProvider {
 	if cacheTTL == 0 {
 		cacheTTL = 1 * time.Minute
 	}
@@ -206,7 +256,7 @@ func NewCachingProvider(issuerURL *url.URL, cacheTTL time.Duration, opts ...inte
 // KeyFunc adheres to the keyFunc signature that the Validator requires.
 // While it returns an interface to adhere to keyFunc, as long as the
 // error is nil the type will be *jose.JSONWebKeySet.
-func (c *CachingProvider) KeyFunc(ctx context.Context) (interface{}, error) {
+func (c *CachingProvider) KeyFunc(ctx context.Context) (any, error) {
 	c.mu.RLock()
 
 	issuer := c.IssuerURL.Hostname()
@@ -251,7 +301,7 @@ func WithSynchronousRefresh(blocking bool) CachingProviderOption {
 	}
 }
 
-func (c *CachingProvider) refreshKey(ctx context.Context, issuer string) (interface{}, error) {
+func (c *CachingProvider) refreshKey(ctx context.Context, issuer string) (any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

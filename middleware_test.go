@@ -31,7 +31,7 @@ func Test_CheckJWT(t *testing.T) {
 	}
 
 	secret := []byte("abcdefghijklmnopqrstuvwxyz012345")
-	keyFunc := func(context.Context) (interface{}, error) {
+	keyFunc := func(context.Context) (any, error) {
 		return secret, nil
 	}
 
@@ -44,7 +44,7 @@ func Test_CheckJWT(t *testing.T) {
 		options        []Option
 		method         string
 		token          string
-		wantToken      interface{}
+		wantToken      any
 		wantStatusCode int
 		wantBody       string
 		path           string
@@ -188,7 +188,7 @@ func Test_CheckJWT(t *testing.T) {
 
 			middleware := New(testCase.validateToken, testCase.options...)
 
-			var actualValidatedClaims interface{}
+			var actualValidatedClaims any
 			var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				actualValidatedClaims = r.Context().Value(ContextKey{})
 

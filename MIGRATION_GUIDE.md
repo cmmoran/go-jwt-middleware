@@ -108,7 +108,7 @@ A token provider is set up in the middleware by passing a
 function:
 
 ```golang
-func(context.Context, string) (interface{}, error)
+func(context.Context, string) (any, error)
 ```
 
 to [jwtmiddleware.New](https://pkg.go.dev/github.com/auth0/go-jwt-middleware#New).

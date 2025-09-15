@@ -230,14 +230,17 @@ func Test_JWKSProvider(t *testing.T) {
 
 		// Eventually it should return a nil JWKS
 		require.EventuallyWithT(t, func(c *assert.CollectT) {
-			returnedJWKS, err := provider.KeyFunc(context.Background())
-			require.Error(t, err)
+			localReturnedJWKS, localErr := provider.KeyFunc(context.Background())
+			if localErr == nil {
+				return
+			}
+			require.Error(t, localErr)
 
-			assert.Nil(c, returnedJWKS)
+			assert.Nil(c, localReturnedJWKS)
 
-			cachedJWKS := provider.cache[malformedURL.Hostname()].jwks
+			localCachedJWKS := provider.cache[malformedURL.Hostname()].jwks
 
-			assert.Nil(t, cachedJWKS)
+			assert.Nil(t, localCachedJWKS)
 		}, 1*time.Second, 250*time.Millisecond, "JWKS did not get uncached")
 	})
 	t.Run("It only calls the API once when multiple requests come in when using the CachingProvider with expired cache (WithSynchronousRefresh)", func(t *testing.T) {

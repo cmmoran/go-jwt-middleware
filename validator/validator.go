@@ -30,11 +30,11 @@ const (
 
 // Validator to use with the jose v2 package.
 type Validator struct {
-	keyFunc            func(context.Context) (interface{}, error) // Required.
-	signatureAlgorithm SignatureAlgorithm                         // Required.
-	expectedClaims     []jwt.Expected                             // Internal.
-	customClaims       func() CustomClaims                        // Optional.
-	allowedClockSkew   time.Duration                              // Optional.
+	keyFunc            func(context.Context) (any, error) // Required.
+	signatureAlgorithm SignatureAlgorithm                 // Required.
+	expectedClaims     []jwt.Expected                     // Internal.
+	customClaims       func() CustomClaims                // Optional.
+	allowedClockSkew   time.Duration                      // Optional.
 }
 
 // SignatureAlgorithm is a signature algorithm.
@@ -60,7 +60,7 @@ var allowedSigningAlgorithms = map[SignatureAlgorithm]bool{
 // New sets up a new Validator with the required keyFunc
 // and signatureAlgorithm as well as custom options.
 func New(
-	keyFunc func(context.Context) (interface{}, error),
+	keyFunc func(context.Context) (any, error),
 	signatureAlgorithm SignatureAlgorithm,
 	issuerURL string,
 	audience []string,
@@ -118,7 +118,7 @@ func New(
 // expects the inclusion of WithExpectedClaims with at least one valid expected claim.
 // A valid expected claim would include an issuer and at least one audience
 func NewValidator(
-	keyFunc func(context.Context) (interface{}, error),
+	keyFunc func(context.Context) (any, error),
 	signatureAlgorithm SignatureAlgorithm,
 	opts ...Option,
 ) (*Validator, error) {
@@ -156,7 +156,7 @@ func NewValidator(
 }
 
 // ValidateToken validates the passed in JWT using the jose v2 package.
-func (v *Validator) ValidateToken(ctx context.Context, tokenString string) (interface{}, error) {
+func (v *Validator) ValidateToken(ctx context.Context, tokenString string) (any, error) {
 	token, err := jwt.ParseSigned(tokenString, signatureAlgorithms(v.signatureAlgorithm))
 	if err != nil {
 		return nil, fmt.Errorf("could not parse the token: %w", err)
@@ -285,7 +285,7 @@ func (v *Validator) deserializeClaims(ctx context.Context, token *jwt.JSONWebTok
 		return jwt.Claims{}, nil, fmt.Errorf("error getting the keys from the key func: %w", err)
 	}
 
-	claims := []interface{}{&jwt.Claims{}}
+	claims := []any{&jwt.Claims{}}
 	if v.customClaimsExist() {
 		claims = append(claims, v.customClaims())
 	}

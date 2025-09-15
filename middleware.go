@@ -25,7 +25,7 @@ type JWTMiddleware struct {
 // an error message describing why validation failed.
 // Inside ValidateToken things like key and alg checking can happen.
 // In the default implementation we can add safe defaults for those.
-type ValidateToken func(context.Context, string) (interface{}, error)
+type ValidateToken func(context.Context, string) (any, error)
 
 // ExclusionUrlHandler is a function that takes in a http.Request and returns
 // true if the request should be excluded from JWT validation.
